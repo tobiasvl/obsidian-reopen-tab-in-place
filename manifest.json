@@ -1,11 +1,11 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
-	"minAppVersion": "1.0.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
-	"isDesktopOnly": false
+	"id": "reopen-tab-in-place",
+	"name": "Reopen Tab In Place",
+	"version": "1.0.2",
+	"minAppVersion": "1.5.0",
+	"description": "Make \"Undo close tab\" reopen closed tabs where they were, instead of at the end of the tab bar.",
+	"author": "Tobias V. I. Langhoff",
+	"authorUrl": "https://github.com/tobiasvl",
+	"fundingUrl": "https://ko-fi.com/tvil",
+	"isDesktopOnly": true
 }
