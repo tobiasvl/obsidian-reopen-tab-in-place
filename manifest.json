@@ -2,7 +2,7 @@
 	"id": "reopen-tab-in-place",
 	"name": "Reopen Tab In Place",
 	"version": "1.0.2",
-	"minAppVersion": "1.5.0",
+	"minAppVersion": "1.7.4",
 	"description": "Make \"Undo close tab\" reopen closed tabs where they were, instead of at the end of the tab bar.",
 	"author": "Tobias V. I. Langhoff",
 	"authorUrl": "https://github.com/tobiasvl",
