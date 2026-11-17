@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceItem, WorkspaceLeaf, WorkspaceParent } from 'obsidian';
+import { Plugin, WorkspaceItem, WorkspaceLeaf, WorkspaceParent, WorkspaceTabs } from 'obsidian';
 import { ClosedTabPosition, getCommand, hasUndoHistory, undoHistoryEntry } from './internal';
 import { patchMethod } from './patch';
 
@@ -6,15 +6,16 @@ const UNDO_CLOSE_TAB_COMMAND = 'workspace:undo-close-pane';
 const LOG_PREFIX = '[Reopen Tab In Place]';
 
 /**
- * Obsidian's "Undo close tab" (workspace:undo-close-pane) finds the closed tab's old tab group and reopens the tab
- * with `group.insertChild(group.children.length, leaf)`, i.e. always at the end. This puts it back where it was
- * closed instead:
+ * Obsidian's "Undo close tab" (workspace:undo-close-pane) reopens a closed tab at the end of its old tab group, and
+ * other plugins may move it too (e.g. Open Tab Settings moves it according to "New tab placement"). This puts it back
+ * where it was closed:
  *
  * 1. Right before a leaf is detached, record its position in its tab group (index and ids of its neighbouring tabs).
  * 2. Attach that position to the entry Obsidian pushes onto workspace.undoHistory. (pushUndoHistory runs after the
  *    leaf has already been removed from its parent, hence step 1.)
- * 3. While the undo command runs, temporarily intercept insertChild on the tab group the tab is reopened into, so the
- *    tab is inserted at its recorded position instead of at the end.
+ * 3. Wrap the undo command. Once the command, and any other plugin's wrapper around it, has finished, move the
+ *    reopened leaf back to its recorded position. This runs in a microtask, so it always gets the last word but still
+ *    happens before the next repaint, so there's no visible jump.
  *
  * Everything else (view state, history, pinned state, focus) is still handled by Obsidian.
  */
@@ -56,16 +57,15 @@ export function registerReopenInPlace(plugin: Plugin): void {
 		}
 		patchMethod(plugin, command, 'checkCallback', (original) => function (this: unknown, checking: boolean) {
 			if (checking) return original.call(this, checking);
-			const position = undoHistoryEntry(workspace.undoHistory[0])?.reopenTabInPlacePosition;
-			const group = position ? findTabGroup(plugin, position.parentId) : null;
-			if (!position || !group) return original.call(this, checking);
-
-			const restoreInsertChild = interceptNextInsert(group, () => resolveIndex(group.children, position));
-			try {
-				return original.call(this, checking);
-			} finally {
-				restoreInsertChild();
+			const entry = undoHistoryEntry(workspace.undoHistory[0]);
+			const result = original.call(this, checking);
+			const position = entry?.reopenTabInPlacePosition;
+			const leafId = entry?.leafId;
+			if (position && leafId) {
+				// Defer until every wrapper around the command has returned
+				queueMicrotask(() => restorePosition(plugin, leafId, position));
 			}
+			return result;
 		});
 	});
 }
@@ -87,32 +87,29 @@ function getTabPosition(leaf: WorkspaceLeaf): ClosedTabPosition | null {
 	};
 }
 
-/** Find a tab group by id. */
-function findTabGroup(plugin: Plugin, id: string): WorkspaceParent | null {
-	const groups: WorkspaceParent[] = [];
-	plugin.app.workspace.iterateAllLeaves((leaf) => {
-		const group: WorkspaceParent | null = leaf.parent;
-		if (group?.id === id) groups.push(group);
-	});
-	return groups[0] ?? null;
-}
+/** Move the reopened leaf back to where it was when it was closed. */
+function restorePosition(plugin: Plugin, leafId: string, position: ClosedTabPosition): void {
+	const leaf = plugin.app.workspace.getLeafById(leafId);
+	if (!leaf) return;
 
-/**
- * Make the next call to group.insertChild insert at getIndex(index) instead of index. Only affects that one call.
- * Returns a function that removes the interception if it hasn't been used.
- */
-function interceptNextInsert(group: WorkspaceParent, getIndex: (index: number) => number): () => void {
-	// Usually insertChild comes from the prototype, but restore an own property exactly as it was if there is one
-	const ownDescriptor = Object.getOwnPropertyDescriptor(group, 'insertChild');
-	const restore = () => {
-		if (ownDescriptor) Object.defineProperty(group, 'insertChild', ownDescriptor);
-		else Reflect.deleteProperty(group, 'insertChild');
-	};
-	group.insertChild = function (index: number, child: WorkspaceItem) {
-		restore();
-		group.insertChild(getIndex(index), child);
-	};
-	return restore;
+	// parent is typed as always set, but is null for leaves that aren't attached
+	const group: WorkspaceParent | null = leaf.parent;
+	// Only if it was reopened into its old tab group (Obsidian falls back to another location if that group is gone)
+	if (!group || group.id !== position.parentId || !Array.isArray(group.children)) return;
+	// Removing the only tab would remove the tab group itself
+	if (group.children.length < 2) return;
+
+	const from = group.children.indexOf(leaf);
+	const target = resolveIndex(group.children.filter((c) => c !== leaf), position);
+	if (target === from) return;
+
+	// removeChild/insertChild don't keep currentTab pointing at the same tab, so reselect it afterwards
+	const tabs = group instanceof WorkspaceTabs ? group : null;
+	const selected = tabs?.children[tabs.currentTab];
+	group.removeChild(leaf);
+	group.insertChild(target, leaf);
+	const selectedIndex = selected ? group.children.indexOf(selected) : -1;
+	if (tabs && selectedIndex !== -1) tabs.selectTabIndex(selectedIndex);
 }
 
 /**
