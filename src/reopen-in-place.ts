@@ -1,11 +1,5 @@
-import { Plugin, WorkspaceLeaf } from 'obsidian';
-import {
-	ClosedTabPosition,
-	InternalTabGroup,
-	getCommand,
-	getInternalWorkspace,
-	internalLeaf,
-} from './internal';
+import { Plugin, WorkspaceItem, WorkspaceLeaf, WorkspaceParent } from 'obsidian';
+import { ClosedTabPosition, getCommand, hasUndoHistory, undoHistoryEntry } from './internal';
 import { patchMethod } from './patch';
 
 const UNDO_CLOSE_TAB_COMMAND = 'workspace:undo-close-pane';
@@ -25,8 +19,8 @@ const LOG_PREFIX = '[Reopen Tab In Place]';
  * Everything else (view state, history, pinned state, focus) is still handled by Obsidian.
  */
 export function registerReopenInPlace(plugin: Plugin): void {
-	const workspace = getInternalWorkspace(plugin.app.workspace);
-	if (!workspace) {
+	const workspace = plugin.app.workspace;
+	if (!hasUndoHistory(workspace)) {
 		console.warn(LOG_PREFIX, 'Obsidian undo history not found, plugin inactive');
 		return;
 	}
@@ -47,9 +41,9 @@ export function registerReopenInPlace(plugin: Plugin): void {
 	patchMethod(plugin, workspace, 'pushUndoHistory', (original) => function (this: typeof workspace, leaf, ...args) {
 		const before = this.undoHistory[0];
 		original.call(this, leaf, ...args);
-		const entry = this.undoHistory[0];
+		const entry = undoHistoryEntry(this.undoHistory[0]);
 		const position = closingPositions.get(leaf);
-		if (entry && entry !== before && position && entry.leafId === internalLeaf(leaf).id) {
+		if (entry && entry !== before && position && entry.leafId === leaf.id) {
 			entry.reopenTabInPlacePosition = position;
 		}
 	});
@@ -62,7 +56,7 @@ export function registerReopenInPlace(plugin: Plugin): void {
 		}
 		patchMethod(plugin, command, 'checkCallback', (original) => function (this: unknown, checking: boolean) {
 			if (checking) return original.call(this, checking);
-			const position = workspace.undoHistory[0]?.reopenTabInPlacePosition;
+			const position = undoHistoryEntry(workspace.undoHistory[0])?.reopenTabInPlacePosition;
 			const group = position ? findTabGroup(plugin, position.parentId) : null;
 			if (!position || !group) return original.call(this, checking);
 
@@ -77,7 +71,8 @@ export function registerReopenInPlace(plugin: Plugin): void {
 }
 
 function getTabPosition(leaf: WorkspaceLeaf): ClosedTabPosition | null {
-	const group = internalLeaf(leaf).parent;
+	// parent is typed as always set, but is null for leaves that aren't attached
+	const group: WorkspaceParent | null = leaf.parent;
 	if (!group || !Array.isArray(group.children)) return null;
 	const siblings = group.children;
 	const index = siblings.indexOf(leaf);
@@ -87,16 +82,16 @@ function getTabPosition(leaf: WorkspaceLeaf): ClosedTabPosition | null {
 	return {
 		parentId: group.id,
 		index,
-		prevId: prev ? internalLeaf(prev).id : null,
-		nextId: next ? internalLeaf(next).id : null,
+		prevId: prev ? prev.id : null,
+		nextId: next ? next.id : null,
 	};
 }
 
 /** Find a tab group by id. */
-function findTabGroup(plugin: Plugin, id: string): InternalTabGroup | null {
-	const groups: InternalTabGroup[] = [];
+function findTabGroup(plugin: Plugin, id: string): WorkspaceParent | null {
+	const groups: WorkspaceParent[] = [];
 	plugin.app.workspace.iterateAllLeaves((leaf) => {
-		const group = internalLeaf(leaf).parent;
+		const group: WorkspaceParent | null = leaf.parent;
 		if (group?.id === id) groups.push(group);
 	});
 	return groups[0] ?? null;
@@ -106,16 +101,16 @@ function findTabGroup(plugin: Plugin, id: string): InternalTabGroup | null {
  * Make the next call to group.insertChild insert at getIndex(index) instead of index. Only affects that one call.
  * Returns a function that removes the interception if it hasn't been used.
  */
-function interceptNextInsert(group: InternalTabGroup, getIndex: (index: number) => number): () => void {
+function interceptNextInsert(group: WorkspaceParent, getIndex: (index: number) => number): () => void {
 	// Usually insertChild comes from the prototype, but restore an own property exactly as it was if there is one
 	const ownDescriptor = Object.getOwnPropertyDescriptor(group, 'insertChild');
 	const restore = () => {
 		if (ownDescriptor) Object.defineProperty(group, 'insertChild', ownDescriptor);
 		else Reflect.deleteProperty(group, 'insertChild');
 	};
-	group.insertChild = function (index: number, leaf: WorkspaceLeaf, ...args: unknown[]) {
+	group.insertChild = function (index: number, child: WorkspaceItem) {
 		restore();
-		group.insertChild(getIndex(index), leaf, ...args);
+		group.insertChild(getIndex(index), child);
 	};
 	return restore;
 }
@@ -124,13 +119,13 @@ function interceptNextInsert(group: InternalTabGroup, getIndex: (index: number) 
  * Index to insert the tab at among the other tabs: right after its old left neighbour, else right before its old right
  * neighbour, else its old index.
  */
-function resolveIndex(others: WorkspaceLeaf[], position: ClosedTabPosition): number {
+function resolveIndex(others: WorkspaceItem[], position: ClosedTabPosition): number {
 	if (position.prevId) {
-		const i = others.findIndex((c) => internalLeaf(c).id === position.prevId);
+		const i = others.findIndex((c) => c.id === position.prevId);
 		if (i !== -1) return i + 1;
 	}
 	if (position.nextId) {
-		const i = others.findIndex((c) => internalLeaf(c).id === position.nextId);
+		const i = others.findIndex((c) => c.id === position.nextId);
 		if (i !== -1) return i;
 	}
 	return Math.min(position.index, others.length);
