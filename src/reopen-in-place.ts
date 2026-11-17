@@ -1,6 +1,7 @@
 import { Plugin, WorkspaceItem, WorkspaceLeaf, WorkspaceParent, WorkspaceTabs } from 'obsidian';
 import { ClosedTabPosition, getCommand, hasUndoHistory, undoHistoryEntry } from './internal';
 import { patchMethod } from './patch';
+import { isInsideTabGroup, tabGroupOf } from './tab-groups-compat';
 
 const UNDO_CLOSE_TAB_COMMAND = 'workspace:undo-close-pane';
 const LOG_PREFIX = '[Reopen Tab In Place]';
@@ -98,10 +99,13 @@ function restorePosition(plugin: Plugin, leafId: string, position: ClosedTabPosi
 	if (!group || group.id !== position.parentId || !Array.isArray(group.children)) return;
 	// Removing the only tab would remove the tab group itself
 	if (group.children.length < 2) return;
+	// The Tab Groups plugin puts tabs back into their group itself (see tab-groups-compat.ts)
+	if (tabGroupOf(leaf)) return;
 
 	const from = group.children.indexOf(leaf);
-	const target = resolveIndex(group.children.filter((c) => c !== leaf), position);
-	if (target === from) return;
+	const others = group.children.filter((c) => c !== leaf);
+	const target = resolveIndex(others, position);
+	if (target === from || isInsideTabGroup(others, target)) return;
 
 	// removeChild/insertChild don't keep currentTab pointing at the same tab, so reselect it afterwards
 	const tabs = group instanceof WorkspaceTabs ? group : null;
