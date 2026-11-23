@@ -114,6 +114,10 @@ function restorePosition(plugin: Plugin, leafId: string, position: ClosedTabPosi
 	group.insertChild(target, leaf);
 	const selectedIndex = selected ? group.children.indexOf(selected) : -1;
 	if (tabs && selectedIndex !== -1) tabs.selectTabIndex(selectedIndex);
+	// Reorder the tab headers now. selectTabIndex only redraws when the selected index changes, otherwise Obsidian
+	// redraws later, and in between the Tab Groups plugin (which rebuilds the tab order from the headers whenever the
+	// tab bar changes) would undo the move.
+	tabs?.updateTabDisplay();
 }
 
 /**
