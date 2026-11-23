@@ -14,4 +14,9 @@ Obsidian has no public API for this, so the plugin relies on a few internal part
 
 ## Compatibility with other plugins
 
+This plugin should be compatible with the following plugins (which I recommend):
+
+- [Open Tab Settings](https://community.obsidian.md/plugins/open-tab-settings)
+- [Tab Groups](https://community.obsidian.md/plugins/tab-groups)
+
 Let me know if it interferes with other plugins by opening an issue!
